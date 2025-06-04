@@ -3,14 +3,6 @@
  * memory allocation algorithm. 
  */
 #include <stdio.h> // printf
-#include "heap.h"
-#define MAX_MCBS 1024
-#define MCB_SIZE 32 
-
-struct MCB {
-  char is_used;
-  int log2_size;
-};
 
 /*
  * The following global variables are used to simulate memory allocation
@@ -28,12 +20,6 @@ int mcb_top    = 0x20006800;   // the top of MCB
 int mcb_bot    = 0x20006BFE;   // the address of the last MCB entry
 int mcb_ent_sz = 0x00000002;   // 2B per MCB entry
 int mcb_total  = 512;          // # MCB entries: 2^9 = 512 entries
-
-static struct MCB mcb_array[MAX_MCBS];
-static void* base_heap = NULL;
-static int total_size = 0;
-static int total_blocks = 0;
-
 
 /*
  * Convert a Cortex SRAM address to the corresponding array index.
@@ -87,7 +73,7 @@ void *_ralloc( int size, int left, int right ) {
   int entire = right - left  + mcb_ent_sz;
   int half = entire / 2;
   int midpoint = left + half;
-  // int heap_addr = NULL;
+  int heap_addr = NULL;
   int act_entire_size = entire * 16;
   int act_half_size = half * 16;
 
@@ -104,9 +90,6 @@ void *_ralloc( int size, int left, int right ) {
       return _ralloc( size, midpoint, right );
     }
     // make sure to split the parent MCB
-
-    if (m2a(midpoint) >= sizeof(array)) return NULL;
-
     if ( ( array[ m2a( midpoint ) ] & 0x01 ) == 0 )
       *(short *)&array[ m2a( midpoint ) ] = act_half_size;
     return heap_addr;
@@ -244,18 +227,18 @@ int _rfree( int mcb_addr ) {
  * be called from Reset_Handler in startup_TM4C129.s before you invoke
  * driver.c's main( ).
  */
-void* _kinit(void* heap_start, int heap_size) {
-  base_heap = heap_start;
-  total_size = ROUNDUP(heap_size);
-  total_blocks = total_size / MCB_SIZE;
+void _kinit( ) {
+  // Zeroing the heap space: no need to implement in step 2's assembly code.
+  for ( int i = 0x20001000; i < 0x20005000; i++ )
+    array[ m2a( i ) ] = 0;
 
-  for (int i = 0; i < total_blocks; ++i) {
-      mcb_array[i].is_used = 0;
-      mcb_array[i].log2_size = 0;
+  // Initializing MCB: you need to implement in step 2's assembly code.
+  *(short *)&array[ m2a( mcb_top ) ] = max_size;
+    
+  for ( int i = 0x20006804; i < 0x20006C00; i += 2 ) {
+    array[ m2a( i ) ] = 0;
+    array[ m2a( i + 1) ] = 0;
   }
-
-  mcb_array[0].log2_size = LOG2(total_blocks);
-  return base_heap;
 }
 
 /*
@@ -264,25 +247,10 @@ void* _kinit(void* heap_start, int heap_size) {
  * @param  the size of a requested memory space
  * @return a pointer to the allocated space
  */
-void* _kalloc(int size) {
-  int blocks_needed = ROUNDUP(size) / MCB_SIZE;
-  int req_log2 = LOG2(blocks_needed);
-  
-  for (int i = 0; i < total_blocks;) {
-      if (!mcb_array[i].is_used && mcb_array[i].log2_size >= req_log2) {
-          while (mcb_array[i].log2_size > req_log2) {
-              int buddy_size = 1 << (mcb_array[i].log2_size - 1);
-              mcb_array[i + buddy_size].is_used = 0;
-              mcb_array[i + buddy_size].log2_size = mcb_array[i].log2_size - 1;
-              mcb_array[i].log2_size -= 1;
-          }
-          mcb_array[i].is_used = 1;
-          return (void*)((char*)base_heap + i * MCB_SIZE);
-      } else {
-          i += 1 << mcb_array[i].log2_size;
-      }
-  }
-  return NULL;
+void *_kalloc( int size ) {
+  // printf( "_kalloc called\n" );
+  size = ( size < 32 ) ? 32 : size; // minimum 32 bytes
+  return _ralloc( size, mcb_top, mcb_bot );
 }
 
 /*
@@ -291,20 +259,21 @@ void* _kalloc(int size) {
  * @param  a pointer to the memory space to be deallocated.
  * @return the address of this deallocated space.
  */
-void _kfree(void* addr) {
-  int index = ((char*)addr - (char*)base_heap) / MCB_SIZE;
-  int log2 = mcb_array[index].log2_size;
-  mcb_array[index].is_used = 0;
+void *_kfree( void *ptr ) {
+  int addr = (int )ptr;
 
-  while (1) {
-      int buddy_index = BUDDY_OF(index, log2);
-      if (buddy_index >= total_blocks || mcb_array[buddy_index].is_used || mcb_array[buddy_index].log2_size != log2) {
-          break;
-      }
-      if (buddy_index < index) index = buddy_index;
-      mcb_array[index].log2_size++;
-      log2 = mcb_array[index].log2_size;
-  }
+  // validate the address
+  // printf( "\n_kfree( %x )\n", ptr );
+  if ( addr < heap_top || addr > heap_bot )
+    return NULL;
+
+  // compute the mcb address corresponding to the addr to be deleted
+  int mcb_addr =  mcb_top + ( addr - heap_top ) / 16;
+  
+  if ( _rfree( mcb_addr ) == 0 )
+    return NULL;
+  else
+    return ptr;
 }
 
 /*
@@ -318,7 +287,7 @@ void *_malloc( int size ) {
   static int init = 0;
   if ( init == 0 ) {
     init = 1;
-    _kinit(array, sizeof(array)); // In step 2, you will call _kinit from Reset_Handler 
+    _kinit( ); // In step 2, you will call _kinit from Reset_Handler 
   }
   return _kalloc( size );
 }
@@ -330,6 +299,6 @@ void *_malloc( int size ) {
  * @param  a pointer to the memory space to be deallocated.
  * @return the address of this deallocated space.
  */
-void _free( void *ptr ) {
-  _kfree( ptr );
+void *_free( void *ptr ) {
+  return _kfree( ptr );
 }
