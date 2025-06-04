@@ -4,10 +4,15 @@
  */
 
 #include <string.h> // bzero, strncpy
-#include <stdlib.h>  // malloc, free
+// #include <stdlib.h>  // malloc, free
+
 #include <signal.h>  // signal
 #include <unistd.h>  // alarm
 #include <stdio.h>   // printf
+
+extern void* malloc(int size);
+extern void free(void* ptr);
+extern void init_heap(void);
 
 int* alarmed;
 
@@ -20,6 +25,7 @@ void sig_handler2( int signum ) {
 }
 
 int main( ) {
+  init_heap();
   char stringA[40] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabc\0";
   char stringB[40];
   
