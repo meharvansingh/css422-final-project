@@ -70,48 +70,31 @@ void printArray( ) {
 void *_ralloc( int size, int left, int right ) {
   // printf( "_ralloc: size=%d, left=%x, right=%x\n", size, left, right );
   // initial parameter computation
-  int entire = right - left  + mcb_ent_sz;
-  int half = entire / 2;
-  int midpoint = left + half;
-  int heap_addr = NULL;
-  int act_entire_size = entire * 16;
-  int act_half_size = half * 16;
+int range      = right - left + mcb_ent_sz;
+int half_range = range >> 1;
+int mid        = left + half_range;
+int act_entire_size = range << 4;
+int act_half_size   = half_range << 4;
 
   // printf( "entire=%d, half=%d, mid=%x, heap=%x, act_entire=%d, act_half=%d\n",
   //	  entire, half, midpoint, heap_addr, act_entire_size, act_half_size );
 
   if ( size <= act_half_size ) {
-    // _ralloc_left
-    // printf( "_ralloc_left\n" );
-    void* heap_addr = _ralloc( size, left, midpoint - mcb_ent_sz );
-    if ( heap_addr == NULL ) {
-      // __alloc_right
-      // printf( "_ralloc_right\n" );
-      return _ralloc( size, midpoint, right );
+    void *addr = _ralloc( size, left, mid - mcb_ent_sz );
+    if ( addr == NULL ) {
+      addr = _ralloc( size, mid, right );
+    } else if ( ( array[ m2a( mid ) ] & 1 ) == 0 ) {
+      *(short *)&array[ m2a( mid ) ] = act_half_size;
     }
-    // make sure to split the parent MCB
-    if ( ( array[ m2a( midpoint ) ] & 0x01 ) == 0 )
-      *(short *)&array[ m2a( midpoint ) ] = act_half_size;
-    return heap_addr;
+    return addr;
   }
-  else {
-    // needs to occupy this chunk
-    if ( ( array[ m2a( left ) ] & 0x01 ) != 0 ) {
-      // used!
-      return NULL; // return invalid
-    }
-    else {
-      // yes, we have an entire space
-      if ( *(short *)&array[ m2a( left ) ] < act_entire_size )
-	// can't fit
-	return NULL;
-      *(short *)&array[ m2a( left ) ] = act_entire_size | 0x01;
+  if ( ( array[ m2a( left ) ] & 1 ) )
+    return NULL;
+  if ( *(short *)&array[ m2a( left ) ] < act_entire_size )
+    return NULL;
 
-      // compute the corresponding heap address
-      return (void *)( heap_top + ( left - mcb_top ) * 16 );
-    }
-  }
-  return NULL;
+  *(short *)&array[ m2a( left ) ] = act_entire_size | 1;
+  return (void *)( heap_top + ( left - mcb_top ) * 16 );
 }
 
 /*
@@ -127,13 +110,13 @@ int _rfree( int mcb_addr ) {
   // 	  mcb_addr, *(short *)&array[ m2a( mcb_addr ) ],
   //	  *(short *)&array[ m2a( mcb_addr ) ] );
   
-  short mcb_contents = *(short *)&array[ m2a( mcb_addr ) ];
-  int mcb_offset = mcb_addr - mcb_top;
-  int mcb_chunk = ( mcb_contents /= 16 );
-  int my_size = ( mcb_contents *= 16 ); // clear the used bit
+  short entry_val = *(short *)&array[ m2a( mcb_addr ) ];
+  int off   = mcb_addr - mcb_top;
+  int chunk = ( entry_val /= 16 );
+  int my_size = ( entry_val *= 16 );
 
   // mcb_addr's used bit was cleared
-  *(short *)&array[ m2a( mcb_addr ) ] = mcb_contents;
+  *(short *)&array[ m2a( mcb_addr ) ] = entry_val;
 
   // printf( "_rfree: mcb[%x] was updated to %x (%d in dec)\n", mcb_addr,
   // 	  mcb_addr, *(short *)&array[ m2a( mcb_addr ) ],
@@ -143,31 +126,31 @@ int _rfree( int mcb_addr ) {
 
   // printf( "_rfree: mcb_offset = %d, mcb_chunk = %d\n", mcb_offset, mcb_chunk );
   
-  if ( ( mcb_offset / mcb_chunk ) % 2 == 0 ) {
+  if ( ( off / chunk ) % 2 == 0 ) {
     // I'm left
     // printf( "_rfree: left\n" );
     
-    if ( mcb_addr + mcb_chunk >= mcb_bot )
+    if ( mcb_addr + chunk >= mcb_bot )
       return 0; // my buddy is beyond mcb_bot!
     else {
-      short mcb_buddy = *(short *)&array[ m2a( mcb_addr + mcb_chunk ) ];
+      short buddy = *(short *)&array[ m2a( mcb_addr + chunk ) ];
 
       // printf( "_rfree: mcb_buddy's address: %x, contents = %x(%d)\n",
       //	      ( mcb_addr + mcb_chunk ), mcb_buddy, mcb_buddy );
       
-      if ( ( mcb_buddy & 0x0001 ) == 0 ) {
+      if ( ( buddy & 0x0001 ) == 0 ) {
 	// my buddy is not used
 	// printf( "my buddy is not used\n" );
 	
-	mcb_buddy = ( mcb_buddy / 32 ) * 32; // clear bit 4-0
-	if ( mcb_buddy == my_size ) {
+        buddy = ( buddy / 32 ) * 32;
+        if ( buddy == my_size ) {
 
 	  // printf( "_rfree: mcb_budy == my_size = %d\n", mcb_buddy );
 	  
 	  // my buddy is unused and has the same size.
-	  *(short *)&array[ m2a( mcb_addr + mcb_chunk ) ] = 0; // clear my buddy
-	  my_size *= 2;
-	  *(short *)&array[ m2a( mcb_addr ) ] = my_size; // merge my budyy
+          *(short *)&array[ m2a( mcb_addr + chunk ) ] = 0;
+          my_size <<= 1;
+          *(short *)&array[ m2a( mcb_addr ) ] = my_size;
 
 	  // printf( "_rfree: my_buddy cleared = %d, myself = %d\n",
 	  //	  *(short *)&array[ m2a( mcb_addr + mcb_chunk ) ],
@@ -175,37 +158,32 @@ int _rfree( int mcb_addr ) {
 	  // printf( "_rfree: promoto myself\n" );
 
 	  // promote myself
-	  return _rfree( mcb_addr );
+          return _rfree( mcb_addr );
 	}
       }
     }
   }
   else {
     // I'm right
-    // printf( "_rfree: right\n" );
-    
-    if ( mcb_addr - mcb_chunk < mcb_top )
-      return 0; // my buddy is below mcb_top!
+
+    if ( mcb_addr - chunk < mcb_top )
+      return 0;
     else {
-      short mcb_buddy = *(short *)&array[ m2a( mcb_addr - mcb_chunk ) ];
+      short buddy = *(short *)&array[ m2a( mcb_addr - chunk ) ];
 
       // printf( "_rfree: mcb_buddy's address: %x, contents = %x(%d)\n",
       //     ( mcb_addr - mcb_chunk ), mcb_buddy, mcb_buddy );      
       
-      if ( ( mcb_buddy & 0x0001 ) == 0 ) {
-	// my buddy is not used
-	// printf( "my buddy is not used\n" );
-	
-	mcb_buddy = ( mcb_buddy / 32 ) * 32; // clear bit 4-0
-	if ( mcb_buddy == my_size ) {
+      if ( ( buddy & 0x0001 ) == 0 ) {
+        buddy = ( buddy / 32 ) * 32;
+        if ( buddy == my_size ) {
 
 	  // printf( "_rfree: mcb_budy == my_size = %d\n", mcb_buddy );
 	  
 	  // my buddy is unused and has the same size.
-	  *(short *)&array[ m2a( mcb_addr ) ] = 0; // clear myself
-	  my_size *= 2;
-	  *(short *)&array[ m2a( mcb_addr - mcb_chunk ) ]
-	    = my_size; // merge me to my buddy
+          *(short *)&array[ m2a( mcb_addr ) ] = 0;
+          my_size <<= 1;
+          *(short *)&array[ m2a( mcb_addr - chunk ) ] = my_size;
 
 	  // printf( "_rfree: myself cleared = %d, my buddy = %d\n",
 	  //	  *(short *)&array[ m2a( mcb_addr ) ],
@@ -213,7 +191,7 @@ int _rfree( int mcb_addr ) {
 	  // printf( "_rfree: promoto my buddy\n" );
 
 	  // promote my buddy
-	  return _rfree( mcb_addr - mcb_chunk );
+          return _rfree( mcb_addr - chunk );
 	}
       }
     }
@@ -240,7 +218,6 @@ void _kinit( ) {
     array[ m2a( i + 1) ] = 0;
   }
 }
-
 /*
  * Step 2 should call _kalloc from SVC_Handler.
  *
