@@ -1,0 +1,3 @@
+this is just a test txt file to see if the functionality of the github graphQL API script works as intended :)
+
+testestestestestestestestestestest
