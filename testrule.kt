@@ -1,5 +1,5 @@
-/ css422-final-project/TestRule.kt
+// css422-final-project/TestRule.kt
 class TestRule : FraudRule {
-    override val name = "Test Rule"
+    override val name: String = "Test Rule"
     // fraud rule logic...
 }
